@@ -7,12 +7,14 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import ru.ilya.vkbot.exception.VkApiException;
 import ru.ilya.vkbot.models.Event;
 import ru.ilya.vkbot.models.EventObjectNewMessage;
 import ru.ilya.vkbot.models.Message;
+import ru.ilya.vkbot.models.VkApiError;
 
-import java.util.Random;
 
 @Service
 @Slf4j
@@ -25,9 +27,11 @@ public class BotService {
     private String token;
 
     private final GsonBuilder gsonBuilder;
+    private final RestTemplate restTemplate;
 
-    public BotService(GsonBuilder gsonBuilder) {
+    public BotService(GsonBuilder gsonBuilder, RestTemplate restTemplate) {
         this.gsonBuilder = gsonBuilder;
+        this.restTemplate = restTemplate;
     }
 
     public String handleEvent(String jsonEvent) {
@@ -40,19 +44,23 @@ public class BotService {
 
             EventObjectNewMessage object = (EventObjectNewMessage) event.getObject();
             Message message = object.getMessage();
-            log.info("New message received from id {}", message.getId());
-            sendMessage(message.getText(), message.getFromId());
+            log.info("New message received from id {}", message.getFromId());
+            try {
+                sendMessage(message.getText(), message.getFromId());
+            }
+            catch (VkApiException e) {
+                log.error(e.getMessage());
+            }
         }
 
         return "ok";
     }
 
-    private void sendMessage(String text, Integer userId) {
+    public void sendMessage(String text, Integer userId) throws VkApiException {
         String url = "https://api.vk.com/method/messages.send";
         String messageText = "Вы сказали: " + text;
-        long randomId = new Random().nextLong();
+        int randomId = 0;
 
-        RestTemplate template = new RestTemplate();
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
         MultiValueMap<String, String> map = new LinkedMultiValueMap<>();
@@ -62,8 +70,22 @@ public class BotService {
         map.add("random_id", Long.toString(randomId));
         map.add("v", "5.199");
 
-        HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(map, headers);
-        ResponseEntity<String> response = template.postForEntity(url, request, String.class);
-        log.info("Message sent: {}", response.getBody());
+        try {
+            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(map, headers);
+            ResponseEntity<String> response = restTemplate.postForEntity(url, request, String.class);
+            String body = response.getBody();
+            if (body == null || body.contains("error_code")) {
+                if (body == null)
+                    throw new VkApiException("No body response from server");
+                body = body.substring(9, body.length() - 1);
+                VkApiError apiError = gsonBuilder.create().fromJson(body, VkApiError.class);
+                throw new VkApiException(apiError.getCode(), apiError.getMessage());
+            }
+
+            log.info("Message sent: {}", body);
+        }
+        catch (RestClientException e) {
+            log.error(e.getMessage());
+        }
     }
 }

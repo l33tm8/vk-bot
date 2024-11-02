@@ -25,7 +25,6 @@ public class EventDeserializer implements JsonDeserializer<Event> {
             }
         }
         return new Event(type, eventObject, groupId);
-
     }
 }
 
